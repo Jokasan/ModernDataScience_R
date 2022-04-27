@@ -1,0 +1,167 @@
+---
+title: "Supervised Learning"
+author: "Nils Indreiten"
+date: "4/12/2022"
+output: html_document
+---
+
+## Supervised Learning
+
+
+In specific non-regression based models. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse)
+url <-"http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+
+census <- read_csv(
+  url,
+  col_names = c(
+    "age", "workclass", "fnlwgt", "education",
+    "education_1", "marital_status", "occupation", "relationship",
+    "race", "sex", "capital_gain", "capital_loss", "hours_per_week",
+    "native_country", "income"
+  )
+) %>%
+  mutate(income = factor(income))
+# save(census, file="census.csv")
+# write_csv(census, file="census.csv")
+read_csv(file = "census.csv")
+```
+
+Logistic regression is based on continuous parametric
+functions. The following models are neither 
+continuous nor expressed as parametric functions.
+
+```{r}
+## Set up training and test data:
+
+library(tidymodels)
+set.seed(364)
+n <- nrow(census)
+census_parts <- census %>%
+  initial_split(prop = 0.8)
+train <- census_parts %>% training()
+test <- census_parts %>% testing()
+pi_bar <- train %>%
+  count(income) %>%
+  mutate(pct = n / sum(n)) %>%
+  filter(income == ">50K") %>%
+  pull(pct)
+```
+
+
+### Decision Trees
+
+Also known as CART, this algorithm is a tree-like 
+flowchart that assigns class labels to individual 
+observations. Each branch of the tree separates
+records in the data set into increasingly "pure"
+observations (i.e.e,homogeneous) subsets. 
+
+A decision tree works by running Hunt's algorithm on 
+the full training data set. 
+
+What does it mean to say that a set of records is
+"purer" than another set? Two popular methods for
+measuring the purity of a set of candidate child
+nodes are the Gini coefficient and the information
+gain. Both are implemented in rpart:
+
+```{r}
+mod_dtree <- decision_tree(mode="classification") |> 
+  set_engine("rpart") |> 
+  fit(income ~ capital_gain, data = train)
+
+# Basically tells where the optimal split occurs
+# for those paying more than 5,119 in capital gains
+split_val <- mod_dtree$fit$splits |> 
+  as_tibble() |> 
+  pull(index)
+```
+
+The summary of the decision tree output tells us that 79%
+of those who paid less than $5,119 in capital tax made 
+less than $50K, roghly 95% of those who paid more than
+$5,119 in capital gains tax made more than $50K. Splitting
+the records in this way divides them into purer subsets.
+This is shown more clearly below:
+
+```{r}
+train_plus <- train |> 
+  mutate(hi_cap_gains = capital_gain >= split_val)
+
+# plot the split:
+
+ggplot(data = train_plus, aes(x = capital_gain, y = income)) + 
+  geom_count(
+    aes(color = hi_cap_gains), 
+    position = position_jitter(width = 0, height = 0.1), 
+    alpha = 0.5
+  ) + 
+  geom_vline(xintercept = split_val, color = "dodgerblue", lty = 3) + 
+  scale_x_log10(labels = scales::dollar)+
+  theme_minimal()
+```
+
+Using capital_gain the decision tree is able to partition
+the data set into 2 parts: those who paid more than 
+$5,119 in cap gains and those who did not. For the former
+who make up 0.952 of all observations - we get 79.5% 
+right by predicting that they made less that $50K. The
+overall accuracy jumps to 80.2% easily besting the null
+model. 
+
+How did it know it should pick $5,119? It tried a series of sensible values
+and $5,119 was the one that lowered the Gini coefficient the most. Although
+we only used one variable, we can use may more predictor variables:
+
+```{r}
+formula <- as.formula(
+  "income~age+workclass+education+marital_status+
+  occupation+relationship+race+sex+capital_gain+
+  capital_loss+hours_per_week"
+)
+
+mod_tree <- 
+  decision_tree(mode = "classification") |> 
+  set_engine("rpart") |> 
+  fit(income~age+workclass+education+marital_status+
+  occupation+relationship+race+sex+capital_gain+
+  capital_loss+hours_per_week, data=train)
+
+mod_tree
+```
+
+In contrast to our first model, the most previous one, does not involve 
+capital_gain at the first split, rather it involves relationship. The 
+partykit package can be sued to demonstrate the tree structure:
+
+```{r}
+# library(rpart)
+# library(partykit)
+# plot(as.party(mod_tree$fit))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,227 @@
+---
+title: 'Chapter 5: Data Wrangling on multiple tables'
+author: "Nils Indreiten"
+date: "11/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse,mdsr,nycflights13)
+```
+
+## Data wrangling on multiple tables
+
+### inner_join()
+
+Examine the first few rows of the flights table, we observe that the 
+carrier column contains a two-character string corresponding to the 
+airline:
+
+```{r}
+glimpse(flights)
+```
+
+
+The airine table contains the same two-character string found in the flights 
+table but also the full name of the airline:
+
+```{r}
+head(airlines,3)
+```
+
+using an inner_join() we can perform the following:
+
+```{r}
+flights_joined <- flights %>% 
+  inner_join(airlines, by = c("carrier" = "carrier"))
+glimpse(flights_joined)
+```
+
+the flights_joined data frame now has a variable called name. This is the column
+from airlines that is now in the combined data frame:
+
+```{r}
+flights_joined %>% 
+  select(carrier,name,flight,origin,dest) %>% 
+  head(4)
+```
+
+Always worth checking that the number of rows in the join operations match up:
+
+```{r}
+nrow(flights)
+nrow(flights_joined)
+```
+
+### left_join()
+
+A left joinwill return the rows of the first table regardless of whether there
+is a match in the second table. Say we r only interested in flights from 
+NYC airports in the Pacific Time Zone, we can filter the airports data frame
+to only include those airports:
+
+
+```{r}
+airports %>% 
+  filter(tz == -8) %>% 
+  nrow()
+```
+
+Perform and inner_join() on flights and airports_pt, matching the destinations
+in flights to the FAA codes in airports, we retreive only those flights that
+flew to our airports in the Pacific Time Zone:
+
+```{r}
+airports %>% 
+  filter(tz == -8) -> airports_pt
+nyc_dests_pt <- flights %>% 
+  inner_join(airports_pt, by = c("dest" = "faa"))
+nrow(nyc_dests_pt)
+```
+
+However if a left_join() is used with the same conditions, we retrieve all of
+the rows of flights. NA's are inserted into the columns where no matched data
+was found:
+
+```{r}
+nyc_dests <- flights %>% 
+  left_join(airports_pt, by= c("dest" = "faa"))
+
+nyc_dests %>% 
+  summarise(
+    num_flights = n(),
+    num_flights_pt = sum(!is.na(name)),
+    num_flights_no_pt = sum(is.na(name))
+  )
+```
+
+
+Exercises:
+
+
+Exercise 1:
+
+Consider the following dfs on US States:
+
+```{r}
+statenames <- tibble(names = state.name, twoletter = state.abb)
+glimpse(statenames)
+
+statedata <- tibble(
+  names = state.name, 
+  income = state.x77[, 2], 
+  illiteracy = state.x77[, 3]
+  )
+glimpse(statedata)
+```
+
+Scatterplot of illiteracy and percapita income:
+
+```{r}
+to_plot <- statedata %>% left_join(statenames, by = c("names"))
+to_plot
+# Create a scatterpplot:
+
+to_plot %>%
+  ggplot(aes(illiteracy, income, label=twoletter))+
+   geom_smooth(se=FALSE)+
+  geom_point()+
+  scale_y_continuous(labels = scales::comma)+
+  ggrepel::geom_text_repel()+
+  ggthemes::theme_clean()
+```
+
+
+Exercise 2:
+
+Using the Batting, Pitching, and Master 
+
+```{r}
+# load frames
+batting <- Lahman::Batting
+Pitching <- Lahman::Pitching
+master <- Lahman::Master
+# Every player in history accumulated at least 300 home runs and at least 300 
+# stolen bases:
+
+batting %>% 
+  select(playerID, HR, SB) %>% 
+  group_by(playerID) %>%
+  summarise(totalhr= sum(HR),
+            totalsb = sum(SB)) %>%
+  arrange(desc(totalhr)) ->  total_hr_sb 
+  
+total_hr_sb %>% 
+  filter(totalhr >= 300, totalsb >=300) %>% 
+  left_join(master, by = c("playerID")) %>% 
+  select(nameFirst, nameLast, totalhr,totalsb) %>% 
+  head(8)
+
+# Every pitcher in history with more than 300 wins and at least 3000 strikeouts
+
+total_wiins <- Pitching %>% 
+  select(playerID,W, SO) %>% 
+  group_by(playerID) %>% 
+    summarise(wins= sum(W),
+              strikeouts = sum(SO))
+total_wiins %>%
+  filter(wins >= 300 , strikeouts >= 3000) %>%
+  left_join(master, by="playerID") %>% 
+  select(nameFirst, nameLast, wins, strikeouts)
+
+# Identify the name and year of every player who has hit at least 50 home runs
+# in a single season
+batting %>% 
+  select(playerID,yearID ,HR) %>% 
+  group_by(playerID, yearID) %>% 
+  summarise(HR = sum(HR)) %>% 
+  ungroup() %>% 
+  filter(HR >= 50) %>% 
+  left_join(master, by = "playerID") -> at_least_50
+
+at_least_50 %>% select(nameFirst, nameLast) %>% distinct()
+```
+
+Exercise 3:
+
+```{r}
+# How many planes have a missing date of manufacture?
+planes %>% 
+  summarise(missingmandate = sum(is.na(year)))
+# 5 most common manufacturers?
+planes %>% 
+  group_by(manufacturer) %>% 
+  count(sort = TRUE) %>% 
+  head(5)
+```
+
+Exercise 4:
+
+```{r}
+# What is the oldest plane that flew from NYC in 2013:
+oldestplanes <- 
+  flights %>% 
+  left_join(planes, by = "tailnum") %>% 
+  na.omit(flightdate) %>% 
+  filter(flightdate == 1956) %>% 
+  select(tailnum) %>% 
+  distinct()
+
+oldestplanes
+
+# How many planes included in planes table flew in flights table 2013:
+nycflights13::planes %>% select(tailnum) %>% distinct() ->tailnums
+
+flights %>% 
+  filter(tailnum %in% tailnums$tailnum) %>% 
+  select(tailnum) %>% 
+  distinct() %>% 
+  count(sort = TRUE)
+```
+
+
+
+
+
+

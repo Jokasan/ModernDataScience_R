@@ -1,0 +1,433 @@
+---
+title: "Chapter 3 Grammar of Graphics"
+author: "Nils Indreiten"
+date: "06/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# load relevant packages:
+pacman::p_load(mdsr,tidyverse)
+
+# begin with the following dataset:
+CIACountries <- as_tibble(CIACountries)
+CIACountries
+theme_set(theme_minimal())
+```
+
+The dataset contains measures that are relevant to answer economic questions. 
+
+## Aesthetics:
+
+In the example below a multivariate graphic is created:
+
+```{r}
+CIACountries %>% ggplot(aes(y=gdp,x=educ))+geom_point(size=3)
+```
+
+Additional aesthetics can be created, for example mapping the color of each dot 
+to the categorical net_useds variable:
+
+```{r}
+CIACountries %>% ggplot(aes(y=gdp,x=educ, color= net_users))+geom_point(size=3)
+```
+
+We can even change the nature of the glyphs, such as text instead of points:
+
+```{r}
+CIACountries %>% ggplot(aes(y=gdp,x=educ, color=net_users))+geom_text(aes(label=country,color=net_users), size=3)
+```
+
+We can also employ multiple aesthetics simultaneously:
+
+```{r}
+g <- ggplot(data = CIACountries, aes(y = gdp, x = educ))
+g + geom_point(aes(color = net_users, size = roadways))
+```
+
+
+## Scales
+
+It is difficult to discern differences in GDP due to its right skewed distribution
+and the linear scale. We can change this using logarithmic scale on the vertical
+axes to make it more readable. However this makes the plot more complex to 
+interpret, the only difference in the code is the addition of coord_trans():
+
+```{r}
+g+geom_point(aes(color=net_users, size=roadways))+
+  coord_trans(y="log10")
+```
+
+
+Scales can also be manipulated in ggplot2. For instance instead of using coord_trans() 
+we could have used scale_y_continuous():
+
+```{r}
+g + 
+  geom_point(aes(color = net_users, size = roadways)) + 
+  scale_y_continuous(
+    name = "Gross Domestic Product", 
+    trans = "log10",
+    labels = scales::comma
+  )
+```
+
+## Facets
+
+Using multiple aesthetics can e confusing. Facets provide multiple side-by-side 
+graphs used to display levels of a categorical variable. :
+
+```{r}
+g + 
+  geom_point(alpha = 0.9, aes(size = roadways)) + 
+  coord_trans(y = "log10") + 
+  facet_wrap(~net_users, nrow = 1) + 
+  theme(legend.position = "top")
+```
+
+## Layers 
+
+One occassion, data from more than one data table are graphed together for example
+the MediCareCharder and MedicareProviders data tables provide information
+about the average cost of each medical procedure in each state. If you live in 
+NJ you might wonder how providers in your state charge for different medical
+procedures. However, you will certainly want to understand those averages in 
+the context of the averages accross all states. In the MedicareCharges table, 
+each row represents a different medical procedure (drg) with its associated average
+cost in each state:
+
+```{r}
+ChargesNJ <- MedicareCharges %>% 
+  filter(stateProvider == "NJ")
+```
+
+We can visualise this information using geom_col():
+
+```{r}
+p <- ChargesNJ %>% 
+  ggplot(aes(reorder(drg, mean_charge), y= mean_charge))+
+  geom_col(fill="indianred3", alpha=0.6)+
+  ylab("Statewide Average Charges ($)")+
+  xlab("Medical Procedure (DRG)")+
+  theme(axis.text.x = element_text(angle = 90,hjust = 1,size = rel(0.5)))
+p
+```
+
+How do these charges compare to New Jersey? The two data tabels, one for NJ and one for 
+the whole country, can be plotted with different glyph types: bars for NJ
+and dots for the states accross the country:
+
+```{r}
+p+geom_point(data = MedicareCharges,size=0.8,alpha=0.4)
+```
+
+# Canonical data graphics in R
+
+## Univariate displays:
+
+Thes types of graphs are used for seeking to understand how a single variable
+is distributed. If numeric then commonly summarised using a histogram or 
+density plot. We can dilay iether plot for the math variable in the SAT_2010 
+data frame by binding the math variable to the x aesthetic:
+
+```{r}
+g <- ggplot(SAT_2010, aes(x=math))
+g
+```
+
+A histogram:
+
+```{r}
+g+geom_histogram(binwidth = 10)+labs(x="Average math SAT score")+scale_y_continuous(expand = c(0,0))
+```
+Binwidths determine the bins in the histogram, no right answer here. A geom density plot:
+
+```{r}
+g+geom_density(adjust= 0.3)
+```
+
+Adjust arguement is used to modify thebandwidth being used by the lernel smoother.
+If the variable is categorical it doesnt make sense to think about the values 
+as having a continous density. Instead use bar graph:
+
+```{r}
+head(SAT_2010, 10) %>% 
+  ggplot(aes(x=reorder(state,math), y= math))+
+  geom_col()+
+  labs(x="State", y="Average math SAT score")
+```
+
+A stacked bar plot is also effective, it is a combination of coord_flip() and
+geom_bar():
+
+```{r}
+mosaicData::HELPrct %>% 
+  ggplot(aes(homeless))+
+  geom_bar(aes(fill=substance), position = "fill")+
+  scale_fill_brewer(palette = "Spectral")+
+  coord_flip()
+```
+
+## Multivariate displays
+
+Used to display relationship between more than one varible:
+
+```{r}
+g <- ggplot(
+  data = SAT_2010, 
+  aes(x = expenditure, y = math)
+) + 
+  geom_point()
+g <- g + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  xlab("Average expenditure per student ($1000)") +
+  ylab("Average score on math SAT")
+```
+
+create a new categorical variable to calculate the SAT_rates:
+
+```{r}
+SAT_2010 <- SAT_2010 %>% 
+  mutate(SAT_rate = cut(
+    sat_pct,
+    breaks = c(0,30,60,100),
+    labels = c("low","medium","high")
+  )
+)
+
+g <- g%+% SAT_2010
+g+aes(color=SAT_rate)
+```
+
+The NHANES data table provides medical, behavioural, and morphometric measuremnts
+of individuals. The plot below shows the relationship between height and age. 
+Some more wrangling is necessary to ensure spatial relationship of the lnes 
+matches the ordering of the legend labels. We can achieve this with fct_relevel():
+
+```{r}
+pacman::p_load(NHANES)
+slice_sample(NHANES, n=1000) %>% 
+ggplot(aes(Age, Height, color = fct_relevel(Gender,"male")))+
+  geom_point()+
+  geom_smooth()+
+  xlab("Age (years)")+
+  ylab("Height (cm)")+
+  labs(color = "Gender")+
+  theme_minimal()
+
+```
+
+Some scatterplots have special meanings. A time series is a scatterplot over time.
+
+```{r}
+pacman::p_load(macleish)
+whately_2015 %>% ggplot(aes(when, temperature))+
+  geom_line(color="lightgray")+
+  geom_smooth()+
+  xlab(NULL)+
+  ylab("Temperature (degrees Celsius)")
+```
+
+A box and whisker plot may be a better way to visualise a numerical response
+variable against a categorical explanatory variables:
+
+```{r}
+whately_2015 %>% 
+  mutate(month= as.factor(lubridate::month(when, label = TRUE))) %>% 
+  group_by(month) %>% 
+  skim(temperature) %>% 
+  select(-na)
+```
+
+```{r}
+ggplot(
+  data = whately_2015, 
+  aes(
+    x = lubridate::month(when, label = TRUE), 
+    y = temperature
+  )
+) + 
+  geom_boxplot() +
+  xlab("Month") + 
+  ylab("Temperature (degrees Celsius)")
+```
+
+
+## Extended example: Historical baby names
+
+Using the data from the babynames package we can recreate many of the plots 
+present in the FiveThirtyEight article:
+
+```{r}
+library(babynames)
+BabynamesDist <- make_babynames_dist()
+BabynamesDist %>% 
+  filter(name == "Benjamin")
+```
+
+## Percentage of people alive today
+
+To compose a similar plot in ggplot, take the relevant subset and set up ggplot 
+object:
+
+```{r}
+joseph <- BabynamesDist %>% 
+  filter(name == "Joseph" & sex == "M")
+name_plot <- ggplot(data=joseph, aes(year))
+```
+
+Next add the bars:
+
+```{r}
+name_plot <- name_plot +
+  geom_col(
+    aes(y= count_thousands * alive_prob),
+    fill = "#b2d7e9", 
+    color = "white",
+    size = 0.1
+  )
+```
+
+
+add the black line:
+
+```{r}
+name_plot <- name_plot +
+  geom_line(aes(y=count_thousands), size =1)
+```
+
+change plot labels:
+
+```{r}
+name_plot <- name_plot +
+  ylab("Number of People (000's")+
+  xlab(NULL)
+```
+
+inspect the specifications of the plot:
+
+```{r}
+summary(name_plot)
+```
+
+The final part is to highlight the median year of birth. This can be computed 
+with wtd.quantile(). Setting the probs arguement to 0.5 will give us the median 
+year of birth, weighted by the number of people estimated to be alive today.
+The pull() function simply extracts the year variable from the data frame:
+
+```{r}
+wtd_quantile <- Hmisc::wtd.quantile
+
+median_yob <- joseph %>% 
+  summarise(year = wtd_quantile(year,est_alive_today, probs = 0.5)) %>% 
+  pull(year)
+median_yob
+```
+
+We can then overplot a single bar in a darker shade of blue. We can use ifelse()
+cleverly. If the year is equal to the median year of birth, then the height of 
+the bar is the estimated number of Josephs alive today. Otherwise the height
+of the bar is zero. In this manner, we plot only the one darker blue bar we 
+want to highlight:
+
+```{r}
+name_plot <- name_plot +
+  geom_col(
+    color = "white", fill = "#008fd5", 
+    aes(y = ifelse(year == 1975, est_alive_today / 1000, 0))
+  )
+```
+
+The graph also contains some contextual elements specific to the name Joseph.
+We can add a title, annotated text, and an arrow providing focus to a specific 
+element of the plot. 
+
+```{r}
+context <- tribble(
+  ~year, ~num_people, ~label,
+  1935, 40, "Number of Josephs\nborn each year",
+  1915, 13, "Number of Josephs\nborn each year
+  \nestimated to be alive\non 1/1/2014", 
+  2003, 40, "The median\nliving Joseph\nis 37 years old", 
+)
+
+name_plot +
+  ggtitle("Age Distribution of American Boys Named Joseph") + 
+  geom_text(
+    data = context, 
+    aes(y = num_people, label = label, color = label)
+  ) + 
+  geom_curve(
+    x = 1990, xend = 1974, y = 40, yend = 24, 
+    arrow = arrow(length = unit(0.3, "cm")), curvature = 0.5
+  ) + 
+  scale_color_manual(
+    guide = FALSE, 
+    values = c("black", "#b2d7e9", "darkgray")
+  ) + 
+  ylim(0, 42)
+```
+
+
+## Most Common Names for Women
+
+```{r}
+com_fem <- BabynamesDist %>% 
+  filter(n > 100, sex == "F") %>% 
+  group_by(name) %>% 
+  mutate(wgt = est_alive_today / sum(est_alive_today)) %>% 
+  summarise(
+    N=n(),
+    est_num_alive= sum(est_alive_today),
+    quantiles = list(
+      wtd_quantile(
+        age_today, est_alive_today, probs = 1:3/4, na.rm = TRUE
+      )
+    )
+  ) %>% 
+  mutate(measures = list(c("q1_age", "median_age", "q3_age"))) %>% 
+  unnest(cols=c(quantiles,measures)) %>% 
+  pivot_wider(names_from = measures, values_from = quantiles) %>% 
+  arrange(desc(est_num_alive)) %>% 
+  head(25)
+```
+
+
+Start by binding the data, defining the x and y aesthetic:
+
+```{r}
+w_plot <- com_fem %>% 
+ 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,12 @@
+url <-
+  "http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+census <- read_csv(
+  url,
+  col_names = c(
+    "age", "workclass", "fnlwgt", "education", 
+    "education_1", "marital_status", "occupation", "relationship", 
+    "race", "sex", "capital_gain", "capital_loss", "hours_per_week", 
+    "native_country", "income"
+  )
+) 
+

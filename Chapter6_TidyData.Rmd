@@ -1,0 +1,328 @@
+---
+title: 'Chapter 6: Tidy Data'
+author: "Nils Indreiten"
+date: "12/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Tidy Data
+
+Read in relevant data, which in this case is data
+on HIV among adults over time:
+
+```{r}
+pacman::p_load(tidyverse,mdsr)
+HIV <- read.csv(file = "adults_with_hiv_percent_age_15_49.csv")
+# Had to download data because the google sheets
+# API didnt work:
+
+HIV %>% 
+  rename(country = 1) %>% 
+  filter(
+    country %in% c("United States", "France",
+                   "South Africa")
+  ) %>% 
+  select(country, `X1979`, `X1989`, `X1999`, `X2009`) %>% 
+  unnest(cols = c(`X2009`)) %>% 
+    mutate(across(matches("[0-9]"), as.double)) -> HIV
+
+HIV
+```
+
+Lets consider an alternative presentation of the same data:
+
+```{r}
+HIV %>% 
+  pivot_longer(-country,names_to = "Year", values_to = "hiv_rate")
+```
+
+### What are tidy data?
+
+In short a table will be tidy when it adheres to two simple 
+rules:
+
+1. The rows/cases/observations, each refer to a specific,
+unique and similar sort of thing. 
+
+2. The columns, each have the same sort of value recorded
+for each row. 
+
+Tidy data make data transformation easier. For example, we
+might want to know the most popular baby names over all the
+years. To do this we need to rearrange the data by adding 
+the counts for a name across all the years:
+
+```{r}
+library(babynames)
+babynames %>% 
+  group_by(sex,name) %>% 
+  summarise(total_births = sum(n)) %>% 
+  arrange(desc(total_births))
+```
+
+## Reshaping Data
+
+```{r}
+bp <- tribble(~subject, ~before,~after,
+              "BHO", 160, 115,
+              "GWB", 120, 135,
+              "WJC", 105, 145)
+bp
+```
+### Pivot Longer
+
+The names of the variables to be gathered together,
+before and after, will become the categorical levels
+in the narrow form:
+
+```{r}
+bp %>% 
+  pivot_longer(-subject, names_to = "when", values_to = "sbp")->bp_onger
+```
+
+### Pivot Wider
+
+To convert form wide to narrow format we do the 
+following:
+
+```{r}
+bp_onger %>% 
+  pivot_wider(names_from = when, values_from = sbp)
+```
+
+### List-columns
+
+Compute the mean systolic blood pressure for each
+subject both before and after exposure:
+
+```{r}
+bp_full <- tribble(~subject, ~when, ~sbp, ~dbp, ~date,
+              "BHO", "before",160, 69, "2007-06-19",
+              "GWB", "before",120, 54,"1998-04-21",
+              "BHO", "before",155, 65, "2005-11-08",
+              "WJC", "after", 145,75, "2002-11-15",
+              "WJC", "after", NA, 65, "2010-03-26",
+              "WJC", "after", 130, 60, "2013-09-15",
+              "GWB", "after", 135,NA, "2009-05-08",
+              "WJC", "before", 105,60, "1990-08-17",
+              "BHO", "after", 115,78,"2017-06-04")
+bp_full  %>% 
+  group_by(subject, when) %>% 
+  summarise(mean_sbp = mean(sbp, na.rm = TRUE)) %>% 
+  ungroup()
+```
+
+What if u wanted to do additional analysis on
+the blood pressure data? Can we create a summary of
+the data that still contains all of the observations?
+
+One approach would be to use paste() with the collapse
+argument to condense individual operations into a 
+single vector:
+
+```{r}
+BP_summary <- bp_full %>% 
+  group_by(subject, when) %>% 
+  summarise(
+    sbps = paste(sbp, collapse = ","),
+    dbps = paste(dbp, collapse = ",")
+  )
+BP_summary
+```
+
+This can be useful for seeing the data, but cant do
+much computing on it, because the variables are now 
+character vectors, therefor the below operation will
+not return the right values:
+
+```{r}
+BP_summary %>%
+  mutate(mean_sbp = mean(parse_number(sbps)))
+```
+
+Instead we can use the nest() function, which will
+collapse all of the ungrouped variables in a data
+frame into a tibble. This creates a new variable
+of type list:
+
+```{r}
+bp_nested <- bp_full %>% 
+  group_by(subject,when) %>% 
+  nest()
+bp_nested
+```
+
+Although every list-column has the type list, the type
+of data contained within that list can be anything. 
+While the data variable contains a list of tibbles,
+we can extract only the systolic blood pressures, 
+and put them in their own list-column. Its tempting
+to try pull():
+
+```{r}
+bp_nested %>% 
+  mutate(sbp_list = pull(data,sbp))
+```
+
+The thing is that data is not a tibble. Rather it is
+a list of tibbles. Therefore we need to use the map()
+function. We need to apply the pull() function to 
+each item in the data list. By using map we will 
+return a list, creating a new list-column:
+
+```{r}
+bp_nested <- bp_nested %>% 
+  mutate(sbp_list = map(data,pull,sbp))
+bp_nested
+```
+We can verify the items in the list by using pluck():
+
+```{r}
+bp_nested %>% 
+  pluck("sbp_list")
+```
+
+Since the pressure readings are contained within the
+list, a further application of map() will allow for
+the computation of the mean:
+
+```{r}
+bp_nested <- bp_nested %>% 
+  mutate(sbp_mean = map(sbp_list, mean, na.rm=TRUE))
+bp_nested
+```
+
+our data frame still has a nested structure. However,
+the column sbp_mean is a list of double vectors. Using
+unnest() to undo the nesting structure of that column:
+
+```{r}
+bp_nested %>% 
+  unnest(cols = c(sbp_mean))
+```
+
+# Worked Examples:
+
+Gender Neutral names:
+
+```{r}
+babynames %>% 
+  filter(name == 'Sue') %>% 
+  group_by(name,sex) %>% 
+  summarise(total = sum(n))
+```
+
+On the other hand some names predominantly given to 
+girls are also given to boys:
+
+```{r}
+babynames %>% 
+  filter(name == "Robin") %>% 
+  group_by(name,sex) %>% 
+  summarise(total = sum(n))
+```
+
+From a computational point of view if we wanted to
+find the most gender-neutral names in all of the data.
+It would make sense to have the results in a wide
+format:
+
+```{r}
+babynames %>% 
+  filter(name %in% c('Sue', 'Robin', 'Leslie')) %>% 
+  group_by(name,sex) %>% 
+  summarise(total = sum(n)) %>% 
+  pivot_wider(
+    names_from = sex,
+    values_from = total
+  )
+```
+
+ ## Exercises:
+ 
+ # Exercise 1 - convert the variables in the Marriage
+ dataset into data formats:
+ 
+```{r}
+library(lubridate)
+library(mosaicData)
+
+Marriage %>% 
+  select(appdate, ceremonydate, dob) %>% 
+  mutate(appdate =ymd(appdate),
+         ceremonydate = ymd(ceremonydate),
+         dob= ymd(dob))
+```
+ 
+# Exercise 2 - rewrite this pipeline in nested form:
+
+```{r}
+mtcars %>% 
+  filter(cyl == 4) %>% 
+  select(mpg,cyl) %>% 
+  group_by(mpg,cyl) %>% 
+  nest() %>% 
+  unnest()
+
+mtcars %>% 
+ nest(cols = c("mpg"))
+```
+
+
+# Exercise 4:
+
+find an interesting Wikipedia page with a table,
+scrape the data from it and generate a figure:
+
+```{r}
+library(rvest)
+url <- "https://en.wikipedia.org/wiki/2022_Winter_Olympics"
+tables <- url %>% 
+  read_html() %>% 
+  html_nodes("table") 
+length(tables)
+
+tables %>% 
+  purrr::pluck(9) %>%
+  html_table() %>% 
+  as_tibble()-> Medals_2022
+
+Medals_2022 %>%  rename(country = '.mw-parser-output .tooltip-dotted{border-bottom:1px dotted;cursor:help}NOC') -> Medals_2022
+
+Medals_2022 %>% 
+  select(country,Gold,Silver,Bronze) %>% 
+  filter(country != 'Totals (29 NOCs)') -> Medals_2022
+
+Medals_2022 %>% 
+ reshape2::melt() %>% 
+  rename(medal_type = variable,
+         number = value) -> Medals_2022
+
+Medals_2022 %>% 
+  filter(country != "Remaining" & medal_type == "Gold") %>% 
+  mutate(label = if_else(condition = country == "Norway", "Gold", "Not")) %>% 
+  ggplot(aes(reorder(country, number), number,fill= label)) +
+  geom_col(position = "dodge") + 
+  scale_fill_manual(
+    values = c("#C9B037", "#808080")) +
+  ggthemes::theme_economist_white() +
+  theme(legend.position = "None") +
+  coord_flip()+
+  scale_y_continuous(expand = c(0,0))+
+  expand_limits(y=c(0,18))+ 
+  labs(
+    title = "2022 Winter Olympic Gold Medals", subtitle = "Norway is the reigning champion!")+
+  xlab("")+
+  ylab("Number of Medals")
+``` 
+
+
+
+
+
+
+

@@ -1,0 +1,122 @@
+---
+title: "Chapter 4: Data Wrangling on One Table"
+output: html_notebook
+---
+
+## A grammar for data wrangling
+
+The tidyverse presents a grammar for data wrangling. 
+
+## select() and filter()
+
+```{r}
+pacman::p_load(tidyverse, mdsr)
+presidential
+```
+
+we can retrieve only names and party affiliations using select():
+
+```{r}
+presidential %>% 
+  select(name,party)
+```
+
+-------------------------
+SKIP ALL THE BORING STUFF
+-------------------------
+
+Some lubridate stuff:
+
+Exercise 7:
+
+```{r}
+library(Lahman)
+Teams %>% head()
+
+```
+
+------------------------------------------------
+The variable names were difficult to understand
+------------------------------------------------ 
+
+Problem 8 
+
+```{r}
+nycflights13::flights %>% head()
+# Which month had the highest proportion of cancelled flights?
+flights2 <- flights %>% filter(is.na(dep_time))
+flights2 %>% select(month) %>% group_by(month) %>% 
+  summarise(prop=n()) %>% 
+  ungroup() %>%
+  arrange(desc(prop))
+```
+
+Problem 11 
+
+```{r}
+# Median violation score by zip code, for zip codes in Manhattan with 50 or more
+# inspections:
+Violations %>% 
+  na.omit() %>% 
+  filter(boro  == "MANHATTAN") %>%
+  select(zipcode, score) %>% 
+  group_by(zipcode) %>% 
+  summarise(count= n(), score = median(score)) %>% 
+  ungroup() %>% 
+  filter(count > 50) %>% 
+  arrange(count, score)
+```
+
+Problem 12
+
+```{r}
+weather <- weather
+# WInd speed summary:
+weather %>% filter(month == 7) %>% select(wind_speed) %>% summary()
+# WHta is the relationship between dwp and humid:
+weather %>% ggplot(aes(dewp, humid))+
+  geom_point(color = "lightgrey")+
+  geom_smooth()+
+  ggthemes::theme_clean() 
+# Relationship between precip and visibility:
+weather %>% ggplot(aes(precip, visib))+
+  geom_point(color = "lightgrey")+
+  geom_smooth(color= "indianred3")+
+  ggthemes::theme_clean() 
+```
+
+Problem 14
+
+```{r}
+flights %>% 
+  mutate(DATE = lubridate::make_date(year,month,day),
+         week = lubridate::week(DATE)) %>% 
+  select(tailnum, DATE, week) %>% 
+  group_by(tailnum, week) %>%
+  count(sort = TRUE) %>%
+  ungroup() %>% 
+  filter(tailnum == "N304JB") %>% 
+  arrange(week) -> most_flights
+
+most_flights %>% 
+  rename(times = n) -> most_flights
+
+most_flights %>% 
+  ggplot(aes(week, times))+
+  geom_col(color="white", fill= "midnightblue", alpha=0.7) +
+  geom_line()+
+  ggthemes::theme_clean()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

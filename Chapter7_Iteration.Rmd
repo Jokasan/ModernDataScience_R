@@ -1,0 +1,580 @@
+---
+title: "Chapter7_Iteration"
+author: "Nils Indreiten"
+date: "14/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Chapter 7
+
+The focus will be on techniques for automating iterative
+operations.
+
+## 7.1 Vectorised operations
+
+Lets recall the data frame:
+```{r}
+pacman::p_load(tidyverse,mdsr, Lahman)
+names(Teams)
+```
+
+Its not immediately obvious, but columns 15 through 40 
+of this data frame contain numerical data:
+
+```{r}
+str(Teams)
+glimpse(Teams)
+```
+
+Say you are interested in computing the averages of the
+26 numeric cilumns. To dont want to have to type the
+names of each of them or retype the mean command 
+26 times. A loop may be helpful in this case:
+
+```{r}
+averages <- NULL
+for (i  in 15:40) {
+  averages [ i - 14] <- mean(Teams[,i], na.rm= TRUE)
+}
+names(averages) <- names(Teams)[15:40]
+averages
+```
+
+Important to understand the fundamental architecture of 
+R, it is based n vectors. There is no special kind of
+atomic object. If you assign a single string to an
+object in R, it is still stored as a vector:
+
+```{r}
+a <- "a string"
+
+class(a)
+
+is.vector(a)
+```
+
+
+## Using across() with dplyr functions:
+
+The function across() can be powerful to solve the
+previous example:
+
+```{r}
+Teams %>% 
+  summarise(across(where(is.numeric), mean, na.rm=TRUE))
+```
+
+The accross() function allows for the specification of 
+a set of variables that summarise(). Since we are
+specifying these columns without the use of a predicate
+function, we dont need to use where():
+
+```{r}
+Teams %>% 
+  summarise(across(c(yearID, R:SF, BPF), mean, na.rm = TRUE))
+```
+
+## The map() family of functions
+
+If the goal is to apply a function to each item in a list or 
+vector, or the columns of a data frame, use map(). This is
+the main function from the purrr package. In the example
+the mean of each of the statistics is calculated all at once:
+
+```{r}
+Teams %>% 
+  select(15:40) %>% 
+  map_dbl(mean, na.rm=TRUE)
+```
+
+# Iterating over a one-dimensional vector
+
+## Iterating a known function
+
+Sometimes we may want to apply a function to each element of 
+a vector or list. For example, the baseball franchise now
+known as the Los Angeles Angels of Anaheim, has had several 
+names during its history:
+
+```{r}
+Teams %>% 
+  filter(franchID == "ANA") %>% 
+  group_by(teamID, name) %>% 
+  summarise(began = first(yearID), ended = last(yearID)) %>% 
+  arrange(began) -> angels
+```
+
+Lets say we wanted to find the length, in number of characters,
+of each of those team names. One solution would be to check 
+manually using nchar():
+
+```{r}
+angels %>% 
+  pull(name) -> angels_names 
+
+nchar(angels_names[1])
+
+nchar(angels_names[2])
+
+nchar(angels_names[3])
+
+nchar(angels_names[4])
+```
+
+This is tiresome and there is a more scalable solution. We can
+use the map_int() function. The map_int() function is like map()
+or map_dbl(), but it always returns an integer vector:
+
+```{r}
+map_int(angels_names, nchar)
+```
+
+
+nchar() is already vectorised so the above was unecessary:
+
+```{r}
+nchar(angels_names)
+```
+
+## Iterating an arbitrary function
+
+One of the most powerful things you can do is apply any function,
+including user defined functions:
+
+```{r}
+top5 <- function(data, team_name) {
+  
+ data %>% 
+    filter(name == team_name) %>% 
+    select(teamID, yearID, W,L,name) %>% 
+    arrange(desc(W)) %>% 
+    head(n = 5)
+  }
+```
+
+We can now do this for every element of our vector with a single 
+call to map().
+
+```{r}
+angels_names %>% 
+  map(top5, data=Teams)
+```
+
+Alternatively, we can collect the results 
+into a single df using map_dfr(). Which in
+essence combines the data frames by row:
+
+```{r}
+angels_names %>% 
+  map_dfr(top5, data = Teams) %>%
+  group_by(teamID, name) %>%
+  summarize(N = n(), mean_wins = mean(W)) %>%
+  arrange(desc(mean_wins)) %>% 
+  ungroup()
+```
+
+## Iterations over subgroups
+
+The group_modify() function allows to apply a function that returns
+a data frame to the groups of a data frame. First define groupings
+using the group_by() function, then apply a function to each of
+those groups. 
+
+### Expected Winning Percentage
+
+The winning percentage statistic introduced by Bill James, 
+using only given knowledge only of the team's runs scored
+and runs allowed to date. This statistic is referred to as 
+Pythagorean Winning Percentage. We can define the function 
+and apply it to our data as below:
+
+```{r}
+exp_wpct <- function(x){
+  return(1/(1+ (1/x)^2))
+}
+
+TeamRuns <- Teams %>% 
+  filter(yearID >= 1954) %>%
+  rename(RS = R) %>% 
+  mutate(WPct = W / (W + L), run_ratio = RS/RA) %>%
+  select(yearID, teamID, lgID, WPct, run_ratio)
+
+
+ggplot(data = TeamRuns, aes(x = run_ratio, y = WPct)) +
+  geom_vline(xintercept = 1, color = "darkgray", linetype = 2) +
+  geom_hline(yintercept = 0.5, color = "darkgray", linetype = 2) +
+  geom_point(alpha = 0.2) + 
+  stat_function(fun = exp_wpct, size = 2, color = "blue") + 
+  xlab("Ratio of Runs Scored to Runs Allowed") + 
+  ylab("Winning Percentage")
+```
+
+
+Research has found that in reality the optimal value of k is not 2,
+but rather closer to 1.85. We can find the optimal value using 
+the nls() function. Specify a formula for the non linear model,
+the data used to fit the model, and a starting value for the 
+search:
+
+```{r}
+TeamRuns %>% 
+  nls(
+    formula = WPct ~ 1/(1 + (1/run_ratio)^k),
+    start = list(k=2)
+  ) %>% 
+  coef() %>% 
+  round(digits = 2)
+```
+
+Researchers found that this value fluctuates over time. Using the 
+group_modify() function we can fit the model for all decades in
+baseball history. The first step is to create a function that 
+will return a data frame containing the optimal exponent and the
+number of observations during that decade:
+
+```{r}
+fit_k <- function(x) {
+  mod <- nls(
+    formula = WPct ~ 1/(1 + (1/run_ratio)^k), 
+    data = x,
+    start = list(k = 2)
+  )
+  return(tibble(k = coef(mod), n = nrow(x)))
+}
+```
+
+This function will return the optimal value of the exponent
+over any time period:
+
+```{r}
+fit_k(TeamRuns)
+```
+
+Finally compute the decade for each year using mutate(), define
+the group using group_by() and apply fit_k() to those decades.
+The use of ~ tells R to interpret the expression in parenthesis
+as a formula, rather than the name of a function. The .x is 
+a placeholder for the data frame for a particular decade:
+
+```{r}
+TeamRuns %>% 
+  mutate(decade = yearID %/% 10 *10) %>% 
+  group_by(decade) %>% 
+  group_modify(~fit_k(.x)) %>% 
+  ungroup()
+```
+
+## Example: Annual Leaders
+
+We want to identify the team in each season that led their league
+in home runs. Easily write a function that will, for a specific
+year and league, return a DE with one row that contains the 
+team with the most home runs:
+
+```{r}
+hr_leader <- function(x) {
+  
+  x %>% 
+    select(teamID, HR) %>% 
+    arrange(desc(HR)) %>% 
+    head(1)
+}
+```
+
+Verify for the year 1961:
+
+```{r}
+Teams %>% 
+  filter(yearID == 1961 & lgID == "AL") %>% 
+  hr_leader()
+```
+
+Using group_modify(), we can find all the teams that led their 
+league in home runs. Employ the .keep arguement so that grouping
+variables appear in computation:
+
+```{r}
+hr_leaders <- Teams %>% 
+  group_by(yearID, lgID) %>% 
+  group_modify(~hr_leader(.x), .keep = TRUE)
+
+tail(hr_leaders, 4)
+```
+Now we can compute the average number of home runs hit in a 
+season by the team that hit the most:
+
+```{r}
+hr_leaders %>% 
+  group_by(lgID) %>% 
+  summarise(mean_hr = mean(HR))
+```
+Restrict the focus to years since 1916, during which AL and NL
+existed:
+
+```{r}
+hr_leaders %>%
+  filter(yearID >= 1916) %>%
+  group_by(lgID) %>%
+  summarize(mean_hr = mean(HR))
+```
+How this number changed over time:
+
+```{r}
+hr_leaders %>% 
+  filter(yearID >= 1916) %>%
+  ggplot(aes(x = yearID, y = HR, color = lgID)) + 
+  geom_line() + 
+  geom_point() + 
+  geom_smooth(se = FALSE) + 
+  geom_vline(xintercept = 1973) + 
+  annotate(
+    "text", x = 1974, y = 25, 
+    label = "AL adopts DH", hjust = "left"
+  ) +
+  labs(x = "Year", y = "Home runs", color = "League")
+```
+
+## Simulation
+
+66 actual values can be created, using the group_modify()
+and the function previously specified:
+
+```{r}
+k_actual <- TeamRuns %>% 
+  group_by(yearID) %>% 
+  group_modify(~fit_k(.x))
+
+k_actual %>% 
+  ungroup() %>% 
+  skim(k)
+```
+
+```{r}
+k_actual %>% 
+  ggplot(aes(k))+
+  geom_density()+
+  xlab("Best fit exponent for a single season")
+```
+
+Since there are only 67 observations, we might be able to gain 
+a better understanding of the sampling distribution of the 
+mean k by re sampling, sampling with replacement from these 67
+values, i.e. bootstrap. An easy way to do this would be to
+map a sampling expression over an index of values. n would be the
+number of iterations to perform, write an expression to compute
+the mean of a single resample, then use map_dbl() to perform 
+iterations:
+
+```{r}
+n <- 10000
+
+bstrap <- 1:n %>% 
+  map_dbl(
+    ~k_actual %>% 
+      pull(k) %>% 
+      sample(replace = TRUE) %>% 
+      mean()
+  )
+
+civals <- bstrap %>% 
+  quantile(probs = c(0.025, .975))
+civals
+```
+
+After  10,000 re samples, 95% of the re sampled exponents were
+between 1.8 and 1.889:
+
+```{r}
+ggplot(data = enframe(bstrap, value = "k"), aes(x = k)) + 
+  geom_density() + 
+  xlab("Distribution of resampled means") + 
+  geom_vline(
+    data = enframe(civals), aes(xintercept = value), 
+    color = "red", linetype = 3
+  )
+```
+
+## Factors associated with BMI
+
+ Some BMI related information, available to us from the 
+ NHANES package. This dataset has many variables therefore t
+ trying to explore the relationship between BMI and these 
+ variables may take ages. For example we may wish to explore
+ the relationship between age and bmi:
+ 
+```{r}
+NHANES::NHANES %>% 
+  ggplot(aes(Age, BMI))+
+  geom_point()+
+  geom_smooth()
+```
+ 
+How can we do this programmatically for all of the variables in
+NHANES? First, need a function that takes the name of a variable
+as an input , and returns the plot. Second, define a set of 
+variables and use map() to iterate our function over that list.
+The following function will take a data set and an argument
+called x_var, that will be the name of a variable:
+
+
+```{r}
+bmi_plot <- function(.data, x_var) {
+  ggplot(.data, aes(y = BMI)) +
+    aes_string(x = x_var) + 
+    geom_jitter(alpha = 0.3) + 
+    geom_smooth() + 
+    labs(
+      title = paste("BMI by", x_var),
+      subtitle = "NHANES",
+      caption = "US National Center for Health Statistics (NCHS)"
+    )
+}
+```
+
+Why use aes_string? this is so that ggplot understands 
+that we want to bind the x aesthetic to the variable 
+whose name is stored in x_var and not a variable
+named x_var. Now we can call our function on a 
+specific valriable:
+
+```{r}
+bmi_plot(NHANES::NHANES, "Age")
+```
+
+Or specify a set of variables and then map() over that.
+SInce map() always returns a list, and a list of plots
+is not that useful, we use the wrap_plots() function 
+from patchwork to combine the results:
+
+```{r}
+c("Age", "HHIncomeMid", "PhysActiveDays", 
+  "TVHrsDay", "AlcoholDay", "Pulse") %>%
+  map(bmi_plot, .data = NHANES::NHANES) %>%
+  patchwork::wrap_plots(ncol = 2)
+```
+
+## Exercises:
+
+1. Calculate the mean for all numeric variables from
+the HELPrct data in the MosaicData package. 
+
+```{r}
+mosaicData::HELPrct %>% select(where(is.numeric)) %>% map(mean)
+```
+
+2. Suppose you want to visit the airports: BOS,JFK,LGA
+SFO,ORD,MDW,LAX. You have written a pipeline that 
+for any given airport code will return a tibble
+with two columns, airport code and average arrival
+delay time:
+
+```{r}
+codes <- c("BOS","JFK","LGA","SFO","ORD","MDW","LAX")
+
+delay_by_air <- function(codes) {
+  flights %>% 
+  filter(dest %in% codes) %>% 
+   select(dest, distance) %>% 
+    group_by(dest) %>%
+   summarise(distance = mean(distance))
+}
+
+delay_by_air(codes = codes)
+```
+
+3. Use the purrr::map() function and the HELPrct data frame from the mosaicData package to fit a regression model predicting cesd as a function of age separately for each of the levels of the substance variable. Generate a table of results (estimates and confidence intervals) for the slope parameter for each level of the grouping variable.
+
+```{r}
+library(tidymodels)
+# First step is to define a model:
+HELPrct <- mosaicData::HELPrct
+
+lm_fit <- lm(formula = cesd ~ age, data =  HELPrct)
+
+HELPrct %>% 
+  nest(data = -substance) %>% 
+  mutate(
+    fit = map(data,~lm(cesd ~ age, data =  .x)),
+    tidied = map(fit, tidy)
+    ) %>% 
+  unnest(tidied)
+```
+
+
+4. : The team IDs corresponding to Brooklyn baseball teams from the Teams data frame from the Lahman package are listed below. Use map_int() to find the number of seasons in which each of those teams played by calling a function called count_seasons.
+
+```{r}
+library(Lahman)
+Teams <- Teams
+bk_teams <- c("BR1", "BR2", "BR3", "BR4", "BRO", "BRP", 
+              "BRF")
+
+count_seasons <- function(data,team_name){
+  data %>% 
+    filter(teamID %in% team_name) %>%   
+    select(yearID,teamID) %>% 
+    # For map_int():
+    # nrow()
+    group_by(teamID) %>%
+    count(sort = TRUE) %>%
+    ungroup()
+}
+
+
+count_seasons(Teams,team_name = bk_teams)
+bk_teams %>% map_int(count_seasons,data=Teams)
+# For Dataframe:
+bk_teams %>% map_dfr(count_seasons,data=Teams)
+```
+
+5.  Use data from the NHANES package to create a set of scatterplots of Pulse as a function of Age, BMI, TVHrsDay, and BPSysAve to create a figure like the last one in the chapter. Be sure to create appropriate annotations (source, survey name, variables being displayed). What do you conclude?
+
+```{r}
+NHANES::NHANES -> tt
+
+pulse_plot <- function(.data, x_var){
+  
+  ggplot(.data,aes(y = Pulse))+
+    aes_string(x = x_var)+
+    geom_jitter(alpha = 0.3)+
+    geom_smooth()+
+    labs(
+      
+    title = paste("Pulse by", x_var),
+    subtitle = "NHANES",
+    caption = "US National Center for Health Statistics (NCHS)"
+    )
+}
+
+c("Age","BMI","TVHrsDay","BPSysAve") %>% 
+  map(pulse_plot, .data = tt) %>% 
+  patchwork::wrap_plots(ncol=2)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

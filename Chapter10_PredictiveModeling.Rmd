@@ -1,0 +1,645 @@
+---
+title: "Chapter10_PredictiveModeling"
+author: "Nils Indreiten"
+date: "07/04/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse,mdsr)
+```
+
+## Example: High-earners in the 1994 United States Census
+
+Load in the data:
+
+```{r}
+# url <- "http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+# 
+# census <- read_csv(
+#   url,
+#   col_names = c(
+#     "age","workclass", "fnlwgt", "education", 
+#     "education_1", "marital_status", "occupation", "relationship", 
+#     "race", "sex", "capital_gain", "capital_loss", "hours_per_week", 
+#     "native_country", "income"
+#   )
+# ) %>% 
+#   mutate(income = factor(income))
+# saveRDS(census, file = "census.Rda")
+readRDS(file = "census.rda")->census
+glimpse(census)
+```
+
+The data set needs to be separated into 2 by sampling at random. A 
+sample of 80% of the rows will become the training set, remaining
+20% will be set aside as the testing ( or "hold-out") data set. We
+can do this by using initial_split(), training and testing functions
+recover the two smaller data sets:
+
+```{r}
+library(tidymodels)
+
+set.seed(364)
+
+n <- nrow(census)
+
+census_parts <- census %>% 
+  initial_split(prop = 0.8)
+
+train <- census_parts %>% 
+  training()
+
+
+test <- census_parts %>% 
+  testing()
+
+
+list(train,test) %>% 
+  map_int(nrow)
+```
+
+First compute the observed percentage of high earners in the training set:
+
+```{r}
+pi_bar <- train %>%
+  count(income) %>%
+  mutate(pct = n / sum(n)) %>%
+  filter(income == ">50K") %>%
+  pull(pct)
+
+pi_bar
+```
+Only around 24% of those in the training sample make more than $50k.
+
+## The null model
+
+Now that we know pi-bar, the accuracy of a null model would be 1-pibar (76%).
+We can get that many right simply by predicting everyone less than $50k.
+
+```{r}
+train %>% 
+  count(income) %>% 
+  mutate(pct = n /sum(n))
+```
+
+Lets store the null model as a model object. This can be done by specifying the
+logistic regression with no explanatory variables. The computational engine
+is glm because glm() is the name of the R function that actually fits:
+
+```{r}
+mod_null <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") %>% 
+  fit(income ~ 1, data = train)
+```
+
+After using the predict() function to compute the predicted variables,
+the yardstick package will help us compute the accuracy:
+
+```{r}
+pred <- train %>% 
+  select(income, capital_gain) %>% 
+  bind_cols(
+    predict(mod_null, new_data = train, type = "class")
+  ) %>% 
+  rename(income_null=.pred_class)
+
+accuracy(pred,income,income_null)
+```
+
+Another way to measure model accuacy is the confusion matrix. It is a two way 
+table that counts ow often our model made the correct prediction. There are
+2 types of errors, Type I, where a high income is predicted but it is in fact
+low, and a Type II error, where a low income is predicted when the income 
+was in fact high:
+
+```{r}
+confusion_null <- pred %>% 
+  conf_mat(truth=income, estimate = income_null)
+
+confusion_null
+```
+
+Since the null model predicts everyone is a low earner, it makes only Type II
+errors and no Type I.
+
+## Logistic Regression
+
+First, fit a model using only capital_gain as th explanatory variable.:
+
+```{r}
+mod_log_1 <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") %>% 
+  fit(income ~ capital_gain, data = train)
+```
+
+Lets visualize how the predicted probability of being a higher earner varies
+as per our model:
+
+```{r}
+train_plus <- train %>% 
+  mutate(high_earner = as.integer(income == ">50K"))
+
+ggplot(train_plus, aes(x=capital_gain,y=high_earner))+
+  geom_count(
+    position = position_jitter(width = 0, height = 0.5),
+    alpha = 0.5
+  ) +
+  geom_smooth(
+    method = "glm", method.args = list(family = "binomial"),
+    color= "indianred3", lty =2, se =FALSE
+  ) +
+  geom_hline(aes(yintercept = 0.5), linetype = 3)+
+  scale_x_log10(labels=scales::dollar)
+
+```
+
+How accurate is this model?
+
+```{r}
+pred <- 
+  pred %>% 
+  bind_cols(
+    predict(mod_log_1, new_data = train, type = "class")
+  ) %>% 
+  rename(income_log_1 = .pred_class)
+
+confusion_log_1 <- 
+  pred %>% 
+  conf_mat(truth = income, estimate = income_log_1)
+
+confusion_log_1
+
+accuracy(pred,income,income_log_1)
+```
+
+Graphically compare the confusion matrices of the null model and the simple
+logistic regression model, note the True Positives in the latter model:
+
+```{r}
+autoplot(confusion_null) +
+  geom_label(
+    aes(
+      x = (xmax + xmin) / 2, 
+      y = (ymax + ymin) / 2, 
+      label = c("TN", "FP", "FN", "TP")
+    )
+  )
+autoplot(confusion_log_1) +
+  geom_label(
+    aes(
+      x = (xmax + xmin) / 2, 
+      y = (ymax + ymin) / 2, 
+      label = c("TN", "FP", "FN", "TP")
+    )
+  )
+```
+
+Using capital_gains as the single explanatory improved model accuracy to 80%.
+Interpret the rule generated by the logistic regression model:
+
+```{r}
+tidy(mod_log_1)
+```
+Inspecting the predicted probabilities willallow us to see the classification
+shifts from <=50K to >50K as the value of capital_gain jumps from $4,101 to
+$4,386:
+
+```{r}
+income_probs <- 
+  pred %>% 
+  select(income,income_log_1, capital_gain) %>% 
+  bind_cols(
+    predict(mod_log_1, new_data = train, type = "prob")
+  )
+
+income_probs %>% 
+  rename(rich_prob = `.pred_<=50K`) %>% 
+  distinct() %>% 
+  filter(abs(rich_prob-0.5)<0.02) %>% 
+  arrange(desc(rich_prob))
+```
+
+Model says we can call a taxpayer high income if their capital gains are above 
+$4,102. Lets incorporate more explanatory variables into the model:
+
+```{r}
+mod_log_all <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") %>% 
+  fit(income ~ age + workclass + education + marital_status + 
+      occupation + relationship + race + sex + 
+      capital_gain + capital_loss + hours_per_week, 
+    data = train
+)
+  
+pred <- pred %>% 
+  bind_cols(
+    predict(mod_log_all, new_data = train, typ ="class")
+  ) %>% 
+  rename(income_log_all = .pred_class)
+
+pred %>% 
+  conf_mat(truth=income, estimate = income_log_all)
+
+accuracy(pred,income,income_log_all)
+```
+
+Repeating the same steps but using the tidymodels framework more strictly:
+
+```{r}
+set.seed(123)
+splits <- initial_split(census, strata = income)
+census_train <- training(splits)
+census_test <- testing(splits)
+
+set.seed(234)
+census_folds <- vfold_cv(census_train, strata = income)
+
+glm_spec <- logistic_reg()
+
+rec <- recipe(income ~ age + workclass + education + marital_status +
+      occupation + relationship + race + sex +
+      capital_gain + capital_loss + hours_per_week,
+    data = census_train)
+
+lg_wf <- workflow(rec,glm_spec)
+
+doParallel::registerDoParallel()
+ctrl_preds <-  control_resamples(save_pred = TRUE)
+rs_log_reg <- fit_resamples(lg_wf, census_folds, control = ctrl_preds)
+
+collect_metrics(rs_log_reg)
+```
+
+# Visualise the curve:
+
+```{r}
+augment(rs_log_reg) %>% 
+  roc_curve(income, `.pred_<=50K`) %>% 
+  autoplot()
+```
+
+Evaluate the model on new data:
+
+```{r}
+# last fit:
+census_fit <- fit(lg_wf, census_train)
+predict(census_fit, census_test, type ="prob")
+
+# last fit:
+
+last_lg_fit <- 
+  lg_wf %>% 
+  last_fit(splits)
+
+last_lg_fit %>% 
+  collect_metrics()
+
+last_lg_fit %>% 
+  collect_predictions() %>% 
+  roc_curve(income,`.pred_<=50K`) %>% 
+  autoplot()
+```
+
+## Evaluting Models:
+
+
+```{r}
+head(income_probs)
+```
+
+ROC curves good measure of classifier performance, they demonstrate the trade of
+between specificity and sensitivity:
+
+```{r}
+pred %>%
+  mutate(estimate = pull(income_probs, `.pred_>50K`)) %>%
+  roc_curve(truth = income, estimate, event_level = "second") %>%
+  autoplot()
+```
+
+autoplot() is the function that returns a plot. A number of other metrics
+are available:
+
+```{r}
+pred %>% 
+  conf_mat( income, income_log_1) %>% 
+  summary(event_level = "second")
+```
+
+## Measuring prediction error for quantitative response:
+
+* RMSE
+
+* MAE
+
+* Correlation
+
+* Coefficient of Determination (R^2)
+
+## Extended Example: Who has diabetes?
+
+Consider the relationship between age and diabetes. Lets start simply
+by considering the relationship between age, BMI and diabetes in the NHANES
+dataset:
+
+```{r}
+library(NHANES)
+
+people <- NHANES |> 
+  select(Age,Gender,Diabetes,BMI,HHIncome,PhysActive) |> 
+  drop_na()
+
+glimpse(people)
+```
+
+```{r}
+people |> 
+  group_by(Diabetes) |> 
+  count() |> 
+  mutate(perc = n/nrow(people) *100)
+```
+
+Tile the Age-BMI plane with a fine grid of 10000 points:
+
+```{r}
+library(modelr)
+num_points <- 100
+
+fake_grid <- data_grid(
+  people,
+  Age = seq_range(Age,num_points),
+  BMI = seq_range(BMI,num_points)
+)
+fake_grid
+```
+
+Create 4 models evaluating them on each grid point, taking care to retrieve
+the probability not the classification itself/ The null model considers no
+variable. The next two models consider only age, or BMI, while the last 
+considers both:
+
+```{r}
+dmod_null <- logistic_reg(mode="classification") |> 
+  set_engine("glm") |> 
+  fit(Diabetes ~ 1, data=people)
+dmod_log_1 <- logistic_reg(mode = "classification") |> 
+  set_engine("glm") |> 
+  fit(Diabetes~Age, data = people)
+dmod_log_2 <- logistic_reg(mode="classification") |> 
+  set_engine("glm") |> 
+  fit(Diabetes ~ BMI, data =people)
+dmod_log_12 <- logistic_reg(mode="classification") |> 
+  set_engine("glm") |>
+  fit(Diabetes ~ Age + BMI, data = people)
+
+bmi_mods <- tibble(
+  type = factor(
+    c("Null", "Logistic(Age)", "Logistic(BMI)", "Logistic(Age,BMI)")
+  ), 
+  mod = list(dmod_null, dmod_log_1, dmod_log_2, dmod_log_12),
+  y_hat = map(mod,predict,new_data = fake_grid, type ="prob")
+)
+```
+
+Next add the grid data, and then use map2() to combine the predictions 
+with the grid data:
+
+```{r}
+bmi_mods <- bmi_mods |> 
+  mutate(
+    X= list(fake_grid),
+    YX = map2(y_hat, X, bind_cols)
+  )
+```
+
+We can use unnest to stretch the data frame since it is a list.
+This will give us the prediction at each of the 10000 grid points:
+
+```{r}
+res <- bmi_mods |> 
+  select(type, YX) |> 
+  unnest(cols = YX)
+res
+```
+
+We can visualise the results:
+
+```{r}
+res |> 
+  ggplot(aes(Age,BMI)) +
+  geom_tile(aes(fill=.pred_Yes), color=NA)+
+  geom_count(data = people, aes(color=Diabetes),
+             alpha=0.4)+
+  scale_fill_gradient("Prob of\nDiabetes", low="White", high="red")+
+  scale_color_manual(values = c("gold","black"))+
+  scale_size(range = c(0,2))+
+  scale_x_continuous(expand = c(0.02,0))+
+  scale_y_continuous(expand = c(0.02,0))+
+  facet_wrap(~fct_rev(type))+
+  theme_minimal()
+```
+
+Exercises:
+
+Modelling the probability of being homeless as a function of age:
+
+a. Generate a confusion matrix for the null model:
+
+```{r}
+mosaicData::HELPrct |> 
+  select(homeless) |> 
+  group_by(homeless) |> 
+  count() |> 
+  mutate(perc= n/nrow(mosaicData::HELPrct))
+## Set u the model:
+
+library(tidymodels)
+
+set.seed(364)
+
+n <- nrow(census)
+
+Help_split <- mosaicData::HELPrct %>% 
+  initial_split(prop = 0.8)
+
+train <- Help_split %>% 
+  training()
+
+
+test <- Help_split %>% 
+  testing()
+
+## Null model:
+
+mod_null <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") %>% 
+  fit(homeless ~ 1, data = train)
+
+## Confusion Matrix:
+pred <- train %>% 
+  select(homeless, age) %>% 
+  bind_cols(
+    predict(mod_null, new_data = train, type = "class")
+  ) %>% 
+  rename(homeless_null=.pred_class)
+
+confusion_nul <- 
+  pred %>% 
+  conf_mat(truth = homeless, estimate = homeless_null )
+
+confusion_nul
+accuracy(pred, homeless,homeless_null) 
+
+## Logistic regression as a function of age
+
+mod_age <- logistic_reg(mode = "classification") |> 
+  set_engine("glm") |> 
+  fit(homeless~age, data =train)
+
+pred_mod2 <- train |> 
+  select(homeless,age) |> 
+  bind_cols(
+    predict(mod_age, new_data = train, type = "class")
+  ) |> 
+  rename(homeless_mod_2 = .pred_class)
+
+pred_mod2 |> 
+  conf_mat(truth = homeless, estimate = homeless_mod_2)
+
+accuracy(pred_mod2, homeless, homeless_mod_2)
+
+## for the probability:
+
+pred_mod2 <- train |> 
+  select(homeless,age) |> 
+  bind_cols(
+    predict(mod_age, new_data = train, type = "prob")
+  ) |> 
+  rename(homeless_mod_2 = .pred_homeless)
+
+# probability of 20 year old:
+pred_mod2 |> 
+  filter(age==20)
+# 40 year old:
+pred_mod2 |> 
+  filter(age==40) |> 
+distinct()
+# Confusion matrix of second model:
+pred_mod2 <- train |> 
+  select(homeless,age) |> 
+  bind_cols(
+    predict(mod_age, new_data = train, type = "class")
+  ) |> 
+  rename(homeless_mod_2 = .pred_class)
+
+pred_mod2 |> 
+conf_mat(truth =homeless, estimate = homeless_mod_2)
+```
+
+
+Problem 4:
+
+Investigators in the HELP (Health Evaluation and Linkage to Primary Care) study 
+were interested in modeling associations between demographic factors and a baseline
+measure of depressive symptoms cesd. They fit a linear regression model using the 
+following predictors: age, sex, and homeless to the HELPrct data from the 
+mosaicData package.
+
+```{r}
+linear_model <-lm(cesd~age+sex+homeless, data = mosaicData::HELPrct)
+linear_model2 <- lm(cesd~1, data=mosaicData::HELPrct)
+
+library(tidymodels)
+
+set.seed(364)
+
+n <- nrow(census)
+
+Help_split <- mosaicData::HELPrct %>% 
+  initial_split(prop = 0.8)
+
+train <- Help_split %>% 
+  training()
+
+
+test <- Help_split %>% 
+  testing()
+
+# linear regression model 1:
+lm_model <- linear_reg() |> 
+  set_engine("lm") |> 
+  set_mode("regression")
+
+lm_fit <- lm_model |> 
+  fit(cesd~age+sex+homeless,
+      data = train)
+lm_fit |> summary()
+
+library(performance)
+
+lm_fit |> 
+  check_model()
+
+lm_fit |>
+  tidy()
+
+lm_fit |> glance()
+
+vip::vip(lm_fit)
+
+# Evaluating Test Set Accuracy:
+
+predict(lm_fit, new_data=test) 
+
+## Combine with actual values:
+test_results <- predict(lm_fit, new_data = test) |> 
+  bind_cols(test)
+
+## Create a workflow:
+cesd_recipe <- recipe(cesd~age+sex+homeless,
+      data = train)
+cesd_workflow <- workflow() |> 
+  add_model(lm_model) |> 
+  add_recipe(cesd_recipe)
+
+cesd_fit <- cesd_workflow |> 
+  last_fit(split=Help_split)
+
+# Calculating metrics:
+cesd_fit |> collect_metrics()
+cesd_fit |> collect_predictions()->cesd_results
+
+
+# Visualise results:
+cesd_results |> 
+  ggplot(aes(.pred,cesd))+
+  geom_point(color = '#006EA1', alpha = 0.25) +
+  geom_abline(intercept = 0, slope = 1, color = 'orange') +
+  labs(title = 'Linear Regression Results - HelpPCRT Test Set',
+       x = 'Predicted Cesd',
+       y = 'Actual Cesd')
+
+# pluck vip:
+cesd_fit %>% 
+  pluck(".workflow",1) %>% 
+  pull_workflow_fit() %>% 
+ vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
+  scale_y_continuous(expand = c(0, 0))+
+  theme_minimal()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

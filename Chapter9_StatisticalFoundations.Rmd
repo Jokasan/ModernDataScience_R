@@ -1,0 +1,756 @@
+---
+title: "Chapter 9: Statistical Foundations"
+author: "Nils Indreiten"
+date: "21/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse,mdsr,nycflights13)
+```
+
+# Samples and Populations
+
+## Example: Setting travel policy by sampling from the population.
+
+
+Suppose you were asked to develop a travel policy for 
+business travel based in NYC. The traveler has a meeting
+in SFO at specified time t. The policy should be formulated
+will say how much earlier than t an acceptable flight 
+should arrive in order to avoid being late to the 
+meeting due to a flight delay. 
+
+For the purpose of this example we will use the 
+subset of the flights in 2013 in the nycflights13 package.
+The problem is to develop a policy for this year based on 
+sample data. The population will be the flights filtered
+for SFO:
+
+```{r}
+SF <- flights %>% 
+  filter(dest == "SFO", !is.na(arr_delay))
+```
+
+We will work with just a sample of this population. Lets
+set the size to be n=25:
+
+```{r}
+set.seed(101)
+sf_25 <- SF %>% 
+  slice_sample(n=25)
+```
+
+A simple way (albeit naive) to set up te policy is to look
+for the longest flight delay and insist that travel be 
+arranged to deal with the delay. 
+
+```{r}
+sf_25 %>% 
+  skim(arr_delay)
+```
+
+The maximum delay is 103 minutes. Should the travel policy,
+plan on arriving in SFO about 2 hours ahead? Lets look
+at the complete set of flights:
+
+```{r}
+SF %>% 
+  skim(arr_delay)
+```
+
+The results are different for the population relative to the
+sample. The longest delay in the population was 
+1007 minutes, suggesting that to avoid a meeting, should 
+travel  the day before the meeting. Sure but then:
+
+* Extra day travel, expenses including lodging, meals, 
+and traveler's time.
+
+* No guarantee there will never be a delay of more than 
+10007 minutes.
+
+
+A sensible travel policy will trade off small probabilities
+of being late against the savings in cost and traveler's 
+time. For instance, you might judge it acceptable to be 
+late 2% of the time, a 98% chance of being on time.
+
+Here's the 98th percentile of the arrivals delays in our
+data sample:
+
+```{r}
+sf_25 %>% 
+  summarise(q98 = quantile(arr_delay, p=0.98))
+```
+A delay of 84 minutes is nearly an hour and a half. So 
+what? The question is really along these lines: consider a 
+90-minute travel policy. how would that have worked in
+achieving our intention to be late 2% of the time?
+
+With the population data in hand, its easy to answer:
+
+```{r}
+SF %>% 
+  group_by(arr_delay > 90) %>% 
+  count() %>% 
+  mutate(prct = n /nrow(SF)*100)
+```
+
+The 90 minute policy mark would miss 5% of the time, worse
+than we intended. To hit only 2% of the time, what value
+would we need to increase it to?
+
+Lets calculate the 98th percentile of arrivals for the 
+population:
+
+```{r}
+SF %>% 
+  summarise(q98 = quantile(arr_delay, p = 0.98))
+```
+
+Should have been around 150. In real life tho if we do not
+have a large enough sample size how can we confidently
+generalise to the population as a whole? 
+
+## Sample Statistics
+
+### Sampling Distribution
+
+Ultimately the goal is to figure out the reliability of 
+a sample from the sample itself. If we were to collect a 
+new sample from the population, how similar would the sample 
+statistic on that new sample be to the same statistic 
+calculated on the original sample? In other words, if we draw
+many different samples form the population, each of size n,
+and calculated the sample statistic on each sample, how 
+similar would the sample statistic be across all samples?
+
+Since we have the population, this is simple to figure out
+using slice_simple() many times and then calculate the sample
+for each trial. Here are 2 samples in which we calculate the
+mean arrival delay:
+
+```{r}
+n <- 25
+
+SF %>% 
+  slice_sample(n = n) %>% 
+  summarise(mean_arr_delay = mean(arr_delay))
+
+
+SF %>% 
+  slice_sample(n = n) %>% 
+  summarise(mean_arr_delay = mean(arr_delay))
+```
+
+Perhaps its better to run many trials. The map() function from
+purrr lets us automate the process. Here are the results 
+from 500 (lets do 1000) trials:
+
+```{r}
+num_trials <- 1000
+sf_25_means <- 1:num_trials %>% 
+  map_dfr(
+    ~SF %>% 
+      slice_sample(n=n) %>% 
+      summarise(mean_arr_delay = mean(arr_delay))
+  ) %>% 
+  mutate(n=n)
+
+head(sf_25_means)
+```
+
+We now have 1000 trials, for each of which we calculated the 
+mean arrival delay. Lets examine the spread:
+
+```{r}
+sf_25_means %>% 
+  skim(mean_arr_delay)
+```
+
+To interpret reliability, the following vocabulary is 
+necessary:
+
+* The sample size is the number of cases in the sample, usually denoted with n. In the above, the sample size is n = 25.
+
+* The sampling distribution is the collection of the sample statistic from all of the trials. We carried out 500 trials here, but the exact number of trials is not important so long as it is large.
+
+* The shape of the sampling distribution is worth noting. Here it is a little skewed to the right. We can tell because in this case the mean is more than twice the median.
+
+* The standard error is the standard deviation of the sampling distribution. It describes the width of the sampling distribution. For the trials calculating the sample mean in samples with  n=25 , the standard error is 9.22 minutes. (You can see this value in the output of skim() above, as the standard deviation of the sample means that we generated.)
+
+* The 95% confidence interval is another way of summarizing the sampling distribution. From Figure 9.1 (left panel) you can see it is about  −16 to +20 minutes. The interval can be used to identify plausible values for the true mean arrival delay. It is calculated from the mean and standard error of the sampling distribution.
+
+```{r}
+sf_25_means %>% 
+  summarise(
+    x_bar = mean(mean_arr_delay),
+    se = sd(mean_arr_delay)
+  ) %>% 
+  mutate(ci_lower = x_bar - 2 * se, # Approximately 95% obs.
+         ci_upper = x_bar + 2 * se) # within 2 sd's
+```
+
+Alternatively calculate directly using a t-test:
+
+```{r}
+sf_25_means %>% 
+  pull(mean_arr_delay) %>% 
+  t.test()
+```
+
+An important question that statistical methods allow to 
+answer is what size of sample n is needed to get a 
+result with acceptable reliability. What constitutes
+"acceptable" depends on the goal being accomplished.
+But measuring reliability is straightforward, i.e.
+it is about finding the standard error and/or
+confidence interval. 
+
+For a sample of size n=25 the range is from -17 to
+57 minutes. This is important. It demonstrates the 
+reliability of the sample mean for samples of arrival
+delays of n=25. For n =25 the se is 9.2 minutes. 
+What would happen if we used an even larger sample,
+n = 100? The calculation is the same as before but 
+with a different n. 
+
+```{r}
+n <- 100
+
+sf_100_means <-  1:500 %>% 
+  map_dfr(
+    ~SF %>% 
+      slice_sample(n=n) %>% 
+      summarise(mean_arr_delay = mean(arr_delay))
+  ) %>% 
+  mutate(n=n)
+```
+
+```{r}
+sf_25_means %>% 
+  bind_rows(sf_100_means) %>% 
+  ggplot(aes(x=mean_arr_delay))+
+  geom_histogram(bins=30)+
+  facet_grid(~n)+
+  xlab("Sample mean")+
+  theme_minimal()
+```
+
+## The Bootstrap
+
+Bootstrapping is a statistical method that allows
+us to approximate the sampling distribution even
+without access to the population. 
+
+Think of the the sample as the population itself.
+draw many samples form the original sample.
+This is _resampling_: drawing a new sample
+from an existing sample. 
+
+With resampling, sample with replacement is 
+adopted, duplication is allowed. Lets consider 
+the following sample (n=3) from the flights data,
+setting replace=TRUE allows for ducplication.
+
+```{r}
+three_flights <- SF %>% 
+  slice_sample(n=3,replace = FALSE) %>% 
+  select(year,month, day, dep_time)
+three_flights
+```
+```{r}
+three_flights <- SF %>% 
+  slice_sample(n=3,replace = TRUE) %>% 
+  select(year,month, day, dep_time)
+three_flights
+```
+Lets utilise bootstrapping to estimate the 
+reliability of the mean arrival time calculated
+on a sample of size 200:
+
+```{r}
+n <- 200
+orig_sample <- SF %>% 
+  slice_sample(n=n,replace = FALSE)
+```
+
+Now with this sample in hand, we can draw a 
+resample of the sample size, and calculate the mean
+arrival delay. 
+
+```{r}
+orig_sample %>% 
+  slice_sample(n=n, replace = TRUE) %>% 
+  summarise(mean_arr_delay = mean(arr_delay))
+```
+
+Repeating this process multiple times, well be 
+able to see how much variation there is across
+the samples:
+
+```{r}
+sf_200_bs <- 1:num_trials %>% 
+  map_dfr(
+    ~orig_sample %>% 
+      slice_sample(n=n, replace = TRUE) %>% 
+      summarise(mean_arr_delay = mean(arr_delay))
+  ) %>% 
+  mutate(n=n)
+
+sf_200_bs %>% 
+  skim(mean_arr_delay)
+```
+
+We can estimate that the sd is 2.3. We wouldn't 
+be able to check, but because we have access to the
+population data, we can. We can now compare our
+bootstrap estimate to a set of hypothetical 
+samples off size n=200 from the original SF 
+flights.
+
+```{r}
+sf_200_pop <- 1:num_trials %>% 
+  map_dfr(
+    ~SF %>% 
+      slice_sample(n=n, replace = TRUE) %>% 
+      summarise(mean_arr_delay = mean(arr_delay))
+  ) %>% 
+  mutate(n=n)
+
+sf_200_pop %>% 
+  skim(mean_arr_delay)
+```
+
+Is the bootstrap standard error a good  
+approximation of the standard error of the 
+population? The distribution of values in the
+bootstrap trials is referred to as the 
+bootstrap distribution. Not the same as the 
+sampling distribution. 
+
+## Example: Setting travel policy
+
+We can get the 98th percentile of the sample of
+size n = 200, and use bootstrapping to see
+how reliable that sample statistic is. The sample
+itself suggests a policy of scheduling a flight
+to arrive 98.16 minutes early:
+
+```{r}
+orig_sample %>% 
+  summarise(q98 = quantile(arr_delay,p=0.98))
+```
+
+The reliability of that estimate can be checked
+using bootstrapping:
+
+```{r}
+n <- nrow(orig_sample)
+sf_200_bs <- 1:num_trials %>% 
+  map_dfr(
+    ~orig_sample %>% 
+      slice_sample(n=n, replace = TRUE) %>% 
+      summarise(q98=quantile(arr_delay, p=0.98))
+  )
+
+sf_200_bs %>% 
+  skim(q98)
+```
+
+The bootstrapped standard error is about 22.7. 
+Corresponding 95% confidence interval is 98.16
++- 46 minutes. A policy based on this would 
+be a shot in the dark. One way to fix things 
+might be to collect more data, hoping to get a 
+more reliable estimate of the 98th percentile. 
+Imagine we could do the work to generate a 
+sample with 10,000 cases:
+
+```{r}
+set.seed(1001)
+
+n_large <- 10000
+
+sf_10000_bs <- SF %>% 
+  slice_sample(n=n_large,replace = FALSE)
+
+sf_200_bs <- 1:num_trials %>% 
+  map_dfr(
+    
+    ~sf_10000_bs %>% 
+      slice_sample(n=n_large, replace = TRUE) %>% 
+      summarise(q98 = quantile(arr_delay, p=0.98))
+  )
+
+sf_200_bs %>% 
+  skim(q98)
+```
+The sd is much narrower, 154 +- 8 minutes.  More 
+data makes it easier to estimate, particularly in
+the tails. 
+
+## Outliers
+
+Considering the role of outliers is important, lets say we consider
+a flight delay of 7 hours (420 minutes) or more as an outlier:
+
+```{r}
+SF %>% 
+  filter(arr_delay >= 420) %>% 
+  select(month, day, dep_delay, arr_delay, carrier)
+```
+
+Most of the delays were in July and by VX (Virgin America). This 
+suggests to potentially avoid this route. However outliers can
+be misleading, they account for a tiny fraction of the flights. 
+We can remove these to get a good idea of the distribution:
+
+```{r}
+SF %>% 
+  filter(arr_delay < 420) %>% 
+  ggplot(aes(arr_delay)) +
+  geom_histogram(binwidth = 10)+
+  labs(x="Arrival delay (in minutes)")
+``` 
+
+The vast majority of flights arrive without any delay or a delay of 
+less than 60 minutes. Can you find a patterns that can presage 
+when longer delays are likely to occur? The outlier suggests 
+month and carrier might be linked to long delays. Lets see
+how it plays out:
+
+```{r}
+SF %>% 
+  mutate(long_delay = arr_delay > 60) %>% 
+  group_by(month,long_delay) %>% 
+  count() %>% 
+  pivot_wider(names_from = month,
+              values_from = n) %>% 
+  data.frame()
+```
+
+June and July seem to be problem months:
+
+```{r}
+SF %>% 
+  mutate(long_delay = arr_delay >60) %>% 
+  group_by(carrier, long_delay) %>% 
+  count() %>% 
+  pivot_wider(names_from = carrier, values_from = n) %>% 
+  data.frame()
+```
+Delta Airlines has good performance, this hints at a policy that might 
+advise early arrival during June and July and to consider Delta when
+traveling to SFO. 
+
+## Statistical Models: Explaining variation
+
+Another way to think about the problem at hand is that we are 
+explaining part of the variation in arrival delay from flight to 
+flight. Statistical modelling provides a way to relate variables
+to one another. Doing so helps understand the systems we are 
+studying. 
+
+Lets put it this way:  What impact, if any, does scheduled time of
+departure have on expected flight delay? Many people think that
+earlier flights are less likely to be delayed. Can this be the case?
+
+Begin by considering the time of the day:
+
+```{r}
+SF %>% 
+  group_by(hour) %>% 
+  count() %>% 
+  pivot_wider(names_from = hour, values_from = n) %>% 
+  data.frame()
+```
+
+Many flights are scheduled early to mid-morning and from late 
+afternoon to early evening. None are scheduled before 5 am or
+after 10 pm. Examine how arrival depends on the hour. First use 
+box-and-whisker plots to show the distribution of arrival delays;
+second with a kind of statistical model called a linear model
+that lets us track the mean arrival delay over the course of the day:
+
+```{r}
+SF %>% 
+  ggplot(aes(x=hour, y=arr_delay))+
+  geom_boxplot(alpha=0.1, aes(group = hour))+
+  geom_smooth(method = "lm", se = TRUE) +
+  xlab("Scheduled hour of departure")+
+  ylab("Arrival delay (minutes)")+
+  coord_cartesian(ylim = c(-30, 120))+
+  theme_classic()
+```
+
+The trend line is created via a regression model:
+
+```{r}
+modd1 <- lm(arr_delay ~ hour, data = SF)
+broom::tidy(modd1)
+```
+
+ This suggests that arrival delay is predicted to be about 2 minutes
+ higher per hour. Over the 15 hours of flights, this leads to a 
+ 30 minute increase in arrival delay comparing flights at the end
+ of the day to the beginning of the day. Broom also
+ calculates the standard error: 0.09 minutes per hour. Stated
+ as a 95% confidence interval, this model indicates that we are 
+ 95% confident that the true arrival delay increase by 2 +- 0.18
+ minutes per hour.
+ 
+ Can we do better? What additional factors might help to explain flight
+ delays? departure airport, carrier, month of the year, and day of the
+ week. some wrangling is necessary: extract day of the week from year,
+ month, and day of the month. Also create a variable season that 
+ summarises what we already know about the month:June and July 
+ are months with long delays. Used as explanatory variables:
+ 
+```{r}
+library(lubridate)
+
+SF <- SF %>% 
+  mutate(
+    day = as.Date(time_hour),
+    dow = as.character(wday(day,label = TRUE)),
+    season = ifelse(month %in% 6:7, "Summer", "Other Month")
+  )
+```
+ 
+Build a model that includes variables we want to use to explain 
+arrival delay:
+
+```{r}
+mod2 <- lm(arr_delay ~ hour + origin + carrier + season + dow, 
+           data = SF)
+broom::tidy(mod2)
+```
+
+Estimate denotes how many minutes should be added to the average 
+delay. Linear models describe how the mean of the response variable
+varies with the explanatory variables. 
+
+## Confounding and accounting for other factors
+
+The causation correlation problem, Lets consider the example
+of confounding using observational data on average teacher salaries
+and average total SAT scores for each State. We can fit a model
+to see how the realtionship unfolds:
+
+```{r}
+SAT_2010 <- SAT_2010 %>% 
+  mutate(Salary = salary/1000)
+
+SAT_plot <- 
+  SAT_2010 %>% 
+  ggplot(aes(Salary, total))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  ylab("Average total score on SAT")+
+  xlab("Average teacher salary (Thousands of USD)")
+
+SAT_plot
+```
+
+```{r}
+SAT_mod1 <- lm(total~Salary, data = SAT_2010)
+broom::tidy(SAT_mod1)
+```
+
+There is another factor to consider. The percentage of students who
+take the SAT in each state varies dramatically. Lets quickly
+get a sense of the distribution:
+
+```{r}
+SAT_2010 %>% 
+  skim(sat_pct)
+```
+
+Lets create a variable referred to as SAT_grp that divides the 
+states into two groups:
+
+```{r}
+SAT_2010 %>% 
+  mutate(SAT_group = ifelse(sat_pct <= 27, "Low","High")) -> SAT_2010
+
+SAT_2010 %>% 
+  group_by(SAT_group) %>% 
+  count()
+```
+Lets visualise the previous plot but this time broken down by 
+SAT_group:
+
+```{r}
+SAT_plot %+% SAT_2010 +
+  aes(color= SAT_group)+
+  scale_color_brewer("% taking\nthe SAT", palette = "Set1")
+```
+
+We can derive the coefficients of the linear model fit to the 
+two separate groups:
+
+```{r}
+SAT_2010 %>% 
+  group_by(SAT_group) %>% 
+  group_modify(~broom::tidy(lm(total ~Salary, data=.x)))
+```
+
+For each of the groups, notice the possibility here to fit models
+to groups without having to use nest(). average teacher salary
+is positively associated with average SAT score. However when 
+collapsing over this variable, average teacher salary is 
+negatively associated with average SAT score. This form
+of compounding is a quantitative version of Simpson's paradox
+and arises in many situations. The summary is:
+
+* Among state with low percentage taking the SAT, teacher salaries
+and SAT scores are positively associated. 
+
+* Among states with a high % of taking the SAT, salaries and
+SAT scores are positively associated. 
+
+* Among all states, salaries and SAT scores are negatively associated. 
+
+Addressing this issue is straightforward if the confounding 
+variables are measure. Stratification (as done above) is one option.
+Multiple regression is another. Lets add sat_pct as an additional 
+predictor into the regression model:
+
+```{r}
+SAT_mod2 <- lm(total ~ Salary + sat_pct, data = SAT_2010)
+broom::tidy(SAT_mod2)
+```
+
+We now see that the slope for Salary is positive and statistically 
+significant when we control for sat_pct. This is consistent with the
+results when the model was stratified by SAT_group. 
+
+We still can't conclude that salaries cause improvements in SAT scores.
+However, the associations after confounding are likely more reliable. 
+
+## Exercises:
+
+# Problem 1:
+
+3 sd.
+
+# Problem 2:
+
+Calculate end interpret a 95% confidence interval of the mean age
+of mothers from Gestation from the mosaicData package:
+
+```{r}
+library(mosaicData)
+
+Gestation %>% 
+  skim(age)
+
+```
+
+The standard deviation for the age in the Gestation dataset is 
+5.78, which therefore indicated that 95% of the age in the population
+falls within ~ +- 10 years. 
+
+
+
+# Problem 3 
+
+Use the bootstrap to generate and interpret a 95% confidence interval
+for the median age of mothers for the Gestation data:
+
+```{r}
+n <- 100
+num_trials <- 10000
+
+Gestation_200_bs <- 1:num_trials %>% 
+  map_dfr(
+    ~Gestation %>% 
+      slice_sample(n=n, replace = TRUE) %>% 
+      summarise(median_age = median(age))
+  ) %>% 
+  mutate(n=n)
+
+Gestation_200_bs %>% 
+  skim(median_age)
+
+```
+
+
+## Problem 4
+
+```{r}
+mosaicData::Gestation ->Gestation 
+library(rsample)
+
+bootstrap_mod <- reg_intervals(wt~age , 
+                               data = Gestation,
+                               times=500)
+bootstrap_mod
+```
+
+
+## Problem 5
+
+Describe the association between smoking status and mortality
+in the Whickham data set from MosaicData:
+
+```{r}
+Whickham <- mosaicData::Whickham
+```
+
+Lets explore the data first:
+
+```{r}
+Whickham %>% 
+  ggplot(aes(age))+
+  geom_histogram(bins = 15)+
+  facet_wrap(~smoker)
+```
+
+Change the variables to factor:
+
+```{r}
+Whickham %>% 
+  mutate_if(is.character,as.factor) -> Whickham
+```
+
+Fit a logistic regression model:
+
+```{r}
+glm(outcome ~smoker + age,family = "binomial",data = Whicham)->W_model
+# Visualise the model
+library(visreg)
+visreg(W_model,
+       "age",
+       by="smoker",
+       gg=TRUE,
+       scale = "response")+
+  labs(y="Prob(Death)",
+       x="Age",
+       title = "Relationship of age and death",
+       subtitle = "controlling for smoker",
+       caption = "source: MosaicData::Whickham")+
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
